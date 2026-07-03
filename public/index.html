@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>IT Nhiều Chuyện · Đặt Boom 💣</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- Animated background blobs -->
+  <div class="bg-blobs">
+    <span class="blob b1"></span>
+    <span class="blob b2"></span>
+    <span class="blob b3"></span>
+    <span class="blob b4"></span>
+  </div>
+
+  <!-- ============ HOME ============ -->
+  <section id="screen-home" class="screen active">
+    <div class="home-wrap">
+      <div class="title-wrap">
+        <div class="title-inner">
+          <h1 class="title-text">IT nhiều chuyện</h1>
+        </div>
+        <span class="orbit o1"></span>
+        <span class="orbit o2"></span>
+        <span class="orbit o3"></span>
+        <span class="orbit o4"></span>
+      </div>
+      <p class="subtitle">💣 Game Đặt Boom · phá thùng, né lửa, hạ đối thủ 🔥</p>
+
+      <div class="panel profile-panel">
+        <label class="field-label">Tên của bạn <span class="req">*bắt buộc</span></label>
+        <input id="name-input" class="text-input" type="text" maxlength="16" placeholder="Nhập tên để vào chơi..." autocomplete="off" />
+
+        <label class="field-label">Chọn nhân vật <span class="req">*bắt buộc</span></label>
+        <div id="char-grid" class="char-grid"></div>
+      </div>
+
+      <div class="mode-buttons">
+        <button id="btn-solo" class="btn btn-primary">🤖 Đấu với máy</button>
+        <button id="btn-create" class="btn btn-secondary">➕ Tạo phòng</button>
+        <button id="btn-join" class="btn btn-secondary">🔑 Vào phòng</button>
+      </div>
+      <p id="home-error" class="error-text"></p>
+    </div>
+  </section>
+
+  <!-- ============ SOLO SETUP MODAL ============ -->
+  <div id="modal-solo" class="modal">
+    <div class="modal-card">
+      <h2>Đấu với máy</h2>
+      <label class="field-label">Số lượng máy</label>
+      <div class="pill-group" id="bot-count-group">
+        <button class="pill active" data-bots="1">1 máy</button>
+        <button class="pill" data-bots="2">2 máy</button>
+        <button class="pill" data-bots="3">3 máy</button>
+      </div>
+      <label class="field-label">Kích thước bản đồ</label>
+      <div class="pill-group" id="solo-map-group">
+        <button class="pill" data-size="medium">Vừa</button>
+        <button class="pill active" data-size="big">Bự</button>
+        <button class="pill" data-size="huge">Siêu bự</button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-close-modal>Huỷ</button>
+        <button id="btn-start-solo" class="btn btn-primary">Bắt đầu 🚀</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ JOIN MODAL ============ -->
+  <div id="modal-join" class="modal">
+    <div class="modal-card">
+      <h2>Vào phòng</h2>
+      <label class="field-label">Mã phòng (4 ký tự)</label>
+      <input id="join-code" class="text-input code-input" type="text" maxlength="4" placeholder="VD: A1B2" />
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-close-modal>Huỷ</button>
+        <button id="btn-do-join" class="btn btn-primary">Vào 🎮</button>
+      </div>
+      <p id="join-error" class="error-text"></p>
+    </div>
+  </div>
+
+  <!-- ============ LOBBY ============ -->
+  <section id="screen-lobby" class="screen">
+    <div class="lobby-wrap">
+      <div class="lobby-head">
+        <div>
+          <div class="lobby-label">MÃ PHÒNG</div>
+          <div class="room-code" id="room-code">----</div>
+        </div>
+        <button id="btn-copy-code" class="btn btn-ghost small">📋 Copy mã</button>
+      </div>
+
+      <div class="panel">
+        <div class="lobby-players-head">
+          <span>Người chơi (<span id="player-count">0</span>/8)</span>
+        </div>
+        <div id="lobby-players" class="lobby-players"></div>
+      </div>
+
+      <div class="panel host-only" id="host-controls">
+        <label class="field-label">Kích thước bản đồ</label>
+        <div class="pill-group" id="lobby-map-group">
+          <button class="pill" data-size="small">Nhỏ</button>
+          <button class="pill" data-size="medium">Vừa</button>
+          <button class="pill active" data-size="big">Bự</button>
+          <button class="pill" data-size="huge">Siêu bự</button>
+        </div>
+        <button id="btn-add-bot" class="btn btn-secondary full">🤖 Thêm máy vào phòng</button>
+      </div>
+
+      <div class="lobby-actions">
+        <button id="btn-leave-lobby" class="btn btn-ghost">← Rời phòng</button>
+        <button id="btn-start-room" class="btn btn-primary host-only">Bắt đầu 🚀</button>
+        <span id="wait-host" class="wait-text">Chờ chủ phòng bắt đầu...</span>
+      </div>
+      <p id="lobby-hint" class="hint-text">Chia sẻ mã phòng cho bạn bè để cùng vào chơi. Chủ phòng có thể thêm máy để đủ tay.</p>
+    </div>
+  </section>
+
+  <!-- ============ GAME ============ -->
+  <section id="screen-game" class="screen">
+    <div class="game-hud">
+      <div id="hud-players" class="hud-players"></div>
+      <div class="hud-right">
+        <span id="hud-timer" class="hud-timer">0.0s</span>
+        <button id="btn-quit-game" class="btn btn-ghost small">Thoát</button>
+      </div>
+    </div>
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Touch controls -->
+    <div class="touch-controls">
+      <div class="dpad">
+        <button class="dbtn up" data-dir="up">▲</button>
+        <button class="dbtn left" data-dir="left">◀</button>
+        <button class="dbtn right" data-dir="right">▶</button>
+        <button class="dbtn down" data-dir="down">▼</button>
+      </div>
+      <button class="bomb-btn" id="bomb-btn">💣</button>
+    </div>
+
+    <!-- Game over overlay -->
+    <div id="game-over" class="overlay">
+      <div class="overlay-card">
+        <h2 id="go-title">🏆 Chiến thắng!</h2>
+        <div id="go-scores" class="go-scores"></div>
+        <div class="overlay-actions">
+          <button id="btn-rematch" class="btn btn-primary">Chơi lại 🔄</button>
+          <button id="btn-back-home" class="btn btn-ghost">Về trang chủ</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

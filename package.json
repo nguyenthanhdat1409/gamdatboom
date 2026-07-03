@@ -1,0 +1,21 @@
+{
+  "name": "it-nhieu-chuyen-boom",
+  "version": "1.0.0",
+  "description": "Game dat boom online/offline - IT Nhieu Chuyen",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["bomberman", "game", "socket.io"],
+  "author": "IT Nhieu Chuyen",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
