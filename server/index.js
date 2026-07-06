@@ -12,8 +12,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 
 const app = express();
-app.use(express.static(join(ROOT, 'public')));
-app.use('/shared', express.static(join(ROOT, 'shared')));
+// Avoid serving stale JS after edits (game logic lives in /shared and /public).
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  next();
+});
+app.use(express.static(join(ROOT, 'public'), { etag: false, lastModified: false }));
+app.use('/shared', express.static(join(ROOT, 'shared'), { etag: false, lastModified: false }));
 
 const httpServer = createServer(app);
 const io = new Server(httpServer);
