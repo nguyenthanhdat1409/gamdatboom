@@ -8,7 +8,7 @@
 // Behaviour priority: flee -> grab power-up -> bomb (box/enemy, with a proven
 // escape) -> dig toward the player -> hunt -> wander. It never freezes.
 
-import { EMPTY, WALL, BOX, BOMB_TIMER } from './constants.js';
+import { EMPTY, WALL, BOX, BOMB_TIMER, P_HALF } from './constants.js';
 
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const SAFE_MARGIN = 0.18; // seconds of buffer when crossing a soon-to-blow tile
@@ -188,11 +188,14 @@ function stepDir(bot, cell) {
   return dy < 0 ? 'up' : 'down';
 }
 
+// Nudge toward the exact centre of the bot's own cell. 0.12 is tight enough that
+// once centred the whole hitbox (half-size 0.35) fits inside this single tile,
+// so it never gets clipped by a blast in the neighbouring tile.
 function centerDir(bot, cx, cy) {
   const tx = cx + 0.5;
   const ty = cy + 0.5;
-  if (Math.abs(tx - bot.x) > 0.2) return tx < bot.x ? 'left' : 'right';
-  if (Math.abs(ty - bot.y) > 0.2) return ty < bot.y ? 'up' : 'down';
+  if (Math.abs(tx - bot.x) > 0.12) return tx < bot.x ? 'left' : 'right';
+  if (Math.abs(ty - bot.y) > 0.12) return ty < bot.y ? 'up' : 'down';
   return null;
 }
 
@@ -261,6 +264,20 @@ function pickBoxCell(state, field, cx, cy, enemy) {
   return target;
 }
 
+// Every tile the bot's body (hitbox) currently overlaps. Matches the engine's
+// coversCell(), so the bot's danger view is exactly what actually kills it.
+function coveredCells(bot) {
+  const x0 = Math.floor(bot.x - P_HALF + 1e-4);
+  const x1 = Math.floor(bot.x + P_HALF - 1e-4);
+  const y0 = Math.floor(bot.y - P_HALF + 1e-4);
+  const y1 = Math.floor(bot.y + P_HALF - 1e-4);
+  const cells = [];
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) cells.push({ x, y });
+  }
+  return cells;
+}
+
 function firstMoveDir(state, bot, avoid, bombCells) {
   const cx = Math.floor(bot.x);
   const cy = Math.floor(bot.y);
@@ -297,10 +314,18 @@ export function computeBotInput(state, botId) {
     && uniqRecent >= 2 && uniqRecent <= 3
     && !danger.has(cellKey);
 
-  // 1) In a blast lane -> ESCAPE using the time-aware planner. Commit to the
-  //    route so we don't dither and blow ourselves up.
-  if (danger.has(key(cx, cy))) {
+  // 1) In a blast lane -> ESCAPE. Danger is checked against the whole hitbox
+  //    (every tile the body overlaps), so straddling a blast tile still counts.
+  const covered = coveredCells(bot);
+  const inDanger = covered.some((c) => danger.has(key(c.x, c.y)));
+  if (inDanger) {
     bot.mem.path = null;
+    // Our own tile is safe and we're only clipping a blast tile because we're
+    // off-centre -> pull fully into our tile and hide there (one whole cell).
+    if (!danger.has(cellKey)) {
+      bot.mem.fleePath = null;
+      return { dir: centerDir(bot, cx, cy), bomb: false };
+    }
     let fp = bot.mem.fleePath;
     const valid = fp && fp.length
       && fp.every((c) => passable(state, c.x, c.y, bombCells))
@@ -398,9 +423,12 @@ export function computeBotInput(state, botId) {
 
   if (!path) {
     // Can't safely reach anything right now. If bombs are ticking on the board,
-    // just STAND STILL on our safe tile and wait them out instead of wandering
-    // into danger. Only roam when the board is calm.
-    if (flame.size > 0) { bot.mem.path = null; return { dir: null, bomb: false }; }
+    // hide on our safe tile and wait them out instead of wandering into danger.
+    // Centre up first so the whole body sits inside one cell (never straddling).
+    if (flame.size > 0) {
+      bot.mem.path = null;
+      return { dir: centerDir(bot, cx, cy), bomb: false };
+    }
     const reachable = safe.order.filter((c) => !(c.x === cx && c.y === cy));
     if (reachable.length) {
       let target;
@@ -412,7 +440,7 @@ export function computeBotInput(state, botId) {
         target = far[Math.floor(Math.random() * far.length)] || reachable[reachable.length - 1];
       }
       path = reconstruct(safe, cx, cy, target);
-    }
+    } 
   }
 
   bot.mem.path = path;
