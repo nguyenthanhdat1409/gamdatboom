@@ -1,14 +1,17 @@
 // Bot AI. Produces {dir, bomb} inputs for a player each tick.
 //
-// Behaviour, in priority order:
-//   1. If it is standing on a lethal tile -> run to the nearest safe tile.
-//   2. Grab a reachable power-up.
-//   3. Drop a bomb when it hits a box or an enemy AND a real escape exists.
-//   4. Walk to the nearest box to blow it up.
-//   5. Hunt the nearest enemy.
-//   6. Wander so it never stands still.
+// The dodging is time-aware: it computes WHEN each tile will catch fire (taking
+// chain reactions between bombs into account), then only walks through a tile if
+// it can fully cross before that tile ignites, and only stops on a tile that no
+// bomb can reach. This makes it reliably dodge its own AND the player's bombs.
+//
+// Behaviour priority: flee -> grab power-up -> bomb (box/enemy, with a proven
+// escape) -> dig toward the player -> hunt -> wander. It never freezes.
 
-import { EMPTY, WALL, BOX } from './constants.js';
+import { EMPTY, WALL, BOX, BOMB_TIMER } from './constants.js';
+
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const SAFE_MARGIN = 0.18; // seconds of buffer when crossing a soon-to-blow tile
 
 function key(x, y) { return `${x},${y}`; }
 
@@ -25,30 +28,60 @@ function passable(state, x, y, bombCells) {
   return true;
 }
 
-// Every tile that is on fire now, or will be when a (real or hypothetical) bomb
-// detonates. Blast is blocked by walls and stops at the first box.
-function buildDanger(state, extraBomb = null) {
-  const danger = new Set();
-  for (const e of state.explosions) danger.add(key(e.x, e.y));
-  const bombs = extraBomb ? [...state.bombs, extraBomb] : state.bombs;
-  for (const b of bombs) {
-    danger.add(key(b.x, b.y));
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      for (let i = 1; i <= b.range; i++) {
-        const cx = b.x + dx * i;
-        const cy = b.y + dy * i;
-        if (cy < 0 || cy >= state.height || cx < 0 || cx >= state.width) break;
-        const t = state.map[cy][cx];
-        if (t === WALL) break;
-        danger.add(key(cx, cy));
-        if (t === BOX) break;
-      }
+// Tiles hit by a bomb at (x,y): the cell itself + arms in 4 directions, stopped
+// by walls, stopping at (and including) the first box.
+function blastCells(state, x, y, range) {
+  const cells = [{ x, y }];
+  for (const [dx, dy] of DIRS) {
+    for (let i = 1; i <= range; i++) {
+      const cx = x + dx * i;
+      const cy = y + dy * i;
+      if (cy < 0 || cy >= state.height || cx < 0 || cx >= state.width) break;
+      const t = state.map[cy][cx];
+      if (t === WALL) break;
+      cells.push({ x: cx, y: cy });
+      if (t === BOX) break;
     }
   }
-  return danger;
+  return cells;
 }
 
-// Flood fill from (sx,sy). Returns parent map + BFS order (nearest first).
+// Map: tile-key -> earliest time (seconds from now) that tile catches fire.
+// Absent key means the tile is never reached by any current bomb. Chain
+// reactions are resolved so a bomb inside another bomb's blast detonates early.
+function buildFlameTimes(state, extraBomb = null) {
+  const bombs = state.bombs.map((b) => ({ x: b.x, y: b.y, range: b.range, timer: b.timer }));
+  if (extraBomb) bombs.push({ x: extraBomb.x, y: extraBomb.y, range: extraBomb.range, timer: BOMB_TIMER });
+
+  const cellsPer = bombs.map((b) => blastCells(state, b.x, b.y, b.range));
+  const times = bombs.map((b) => Math.max(0, b.timer));
+
+  // Chain propagation until stable.
+  for (let it = 0; it <= bombs.length; it++) {
+    let changed = false;
+    for (let i = 0; i < bombs.length; i++) {
+      for (let j = 0; j < bombs.length; j++) {
+        if (i === j) continue;
+        if (times[i] < times[j] &&
+            cellsPer[i].some((c) => c.x === bombs[j].x && c.y === bombs[j].y)) {
+          times[j] = times[i];
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+
+  const flame = new Map();
+  const setMin = (k, v) => { const e = flame.get(k); if (e === undefined || v < e) flame.set(k, v); };
+  for (const e of state.explosions) setMin(key(e.x, e.y), 0);
+  for (let i = 0; i < bombs.length; i++) {
+    for (const c of cellsPer[i]) setMin(key(c.x, c.y), times[i]);
+  }
+  return flame;
+}
+
+// Flood fill (avoiding solids + `avoid` tiles). Returns parent map + BFS order.
 function bfsField(state, sx, sy, avoid, bombCells) {
   const prev = new Map();
   const seen = new Set([key(sx, sy)]);
@@ -58,7 +91,7 @@ function bfsField(state, sx, sy, avoid, bombCells) {
   while (head < q.length) {
     const cur = q[head++];
     order.push(cur);
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (const [dx, dy] of DIRS) {
       const nx = cur.x + dx;
       const ny = cur.y + dy;
       const k = key(nx, ny);
@@ -91,6 +124,56 @@ function pathToPred(field, sx, sy, pred) {
   return null;
 }
 
+// Time-aware escape. BFS by steps; entering a tile is only allowed if we can
+// fully cross it before it ignites. Prefers the nearest never-ignite tile;
+// falls back to the reachable tile that stays safe longest.
+function safeEscape(state, sx, sy, flame, stepTime, bombCells) {
+  const prev = new Map();
+  const depth = new Map([[key(sx, sy), 0]]);
+  const seen = new Set([key(sx, sy)]);
+  const q = [{ x: sx, y: sy }];
+  let head = 0;
+  let bestSafe = null;
+  let delayCell = null;
+  let delayT = -1;
+
+  while (head < q.length) {
+    const cur = q[head++];
+    const ck = key(cur.x, cur.y);
+    const cd = depth.get(ck);
+    if (!(cur.x === sx && cur.y === sy)) {
+      const fs = flame.get(ck);
+      if (fs === undefined) { bestSafe = cur; break; } // nearest fully-safe tile
+      if (fs > delayT) { delayT = fs; delayCell = cur; }
+    }
+    for (const [dx, dy] of DIRS) {
+      const nx = cur.x + dx;
+      const ny = cur.y + dy;
+      const nk = key(nx, ny);
+      if (seen.has(nk)) continue;
+      if (!passable(state, nx, ny, bombCells)) continue;
+      const nd = cd + 1;
+      const nfs = flame.get(nk);
+      // Must be able to arrive and leave before this tile ignites.
+      if (nfs !== undefined && nfs < (nd + 1) * stepTime + SAFE_MARGIN) continue;
+      seen.add(nk);
+      prev.set(nk, cur);
+      depth.set(nk, nd);
+      q.push({ x: nx, y: ny });
+    }
+  }
+
+  const goal = bestSafe || delayCell;
+  if (!goal) return null;
+  const path = [];
+  let c = goal;
+  while (c && !(c.x === sx && c.y === sy)) {
+    path.unshift(c);
+    c = prev.get(key(c.x, c.y));
+  }
+  return path.length ? path : null;
+}
+
 function stepDir(bot, cell) {
   const tx = cell.x + 0.5;
   const ty = cell.y + 0.5;
@@ -99,8 +182,16 @@ function stepDir(bot, cell) {
   return null;
 }
 
+function centerDir(bot, cx, cy) {
+  const tx = cx + 0.5;
+  const ty = cy + 0.5;
+  if (Math.abs(tx - bot.x) > 0.2) return tx < bot.x ? 'left' : 'right';
+  if (Math.abs(ty - bot.y) > 0.2) return ty < bot.y ? 'up' : 'down';
+  return null;
+}
+
 function adjacentToBox(state, x, y) {
-  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+  for (const [dx, dy] of DIRS) {
     const nx = x + dx;
     const ny = y + dy;
     if (ny < 0 || ny >= state.height || nx < 0 || nx >= state.width) continue;
@@ -117,19 +208,6 @@ function enemyAtCell(state, bot, x, y) {
   return false;
 }
 
-// An enemy sits in the straight-line blast of a bomb dropped at (x,y).
-function enemyInBlast(state, bot, x, y, range) {
-  for (const p of Object.values(state.players)) {
-    if (!p.alive || p.id === bot.id) continue;
-    const px = Math.floor(p.x);
-    const py = Math.floor(p.y);
-    if (px === x && Math.abs(py - y) <= range && clearLine(state, x, y, 0, Math.sign(py - y), Math.abs(py - y))) return true;
-    if (py === y && Math.abs(px - x) <= range && clearLine(state, x, y, Math.sign(px - x), 0, Math.abs(px - x))) return true;
-  }
-  return false;
-}
-
-// True if the straight line from (x,y) to n steps in (dx,dy) is not blocked by a wall.
 function clearLine(state, x, y, dx, dy, n) {
   for (let i = 1; i <= n; i++) {
     const cx = x + dx * i;
@@ -140,26 +218,15 @@ function clearLine(state, x, y, dx, dy, n) {
   return true;
 }
 
-// If a bomb were dropped at (x,y), return a concrete escape path to a safe
-// tile (or null if there is none). The bot commits to this path so it never
-// dithers left/right/up/down and blows itself up.
-function findEscape(state, bot, x, y, bombCells) {
-  const danger2 = buildDanger(state, { x, y, range: bot.range });
-  const field = bfsField(state, x, y, null, bombCells);
-  const path = pathToPred(field, x, y, (cx, cy) => !danger2.has(key(cx, cy)));
-  if (path && path.length <= bot.range + 4) return path;
-  return null;
-}
-
-// Direction to move toward the centre of the bot's own (empty) cell.
-function centerDir(bot, cx, cy) {
-  const tx = cx + 0.5;
-  const ty = cy + 0.5;
-  // 0.2 keeps the bomb in this cell while being loose enough to avoid jitter
-  // at high speeds.
-  if (Math.abs(tx - bot.x) > 0.2) return tx < bot.x ? 'left' : 'right';
-  if (Math.abs(ty - bot.y) > 0.2) return ty < bot.y ? 'up' : 'down';
-  return null;
+function enemyInBlast(state, bot, x, y, range) {
+  for (const p of Object.values(state.players)) {
+    if (!p.alive || p.id === bot.id) continue;
+    const px = Math.floor(p.x);
+    const py = Math.floor(p.y);
+    if (px === x && Math.abs(py - y) <= range && clearLine(state, x, y, 0, Math.sign(py - y) || 1, Math.abs(py - y))) return true;
+    if (py === y && Math.abs(px - x) <= range && clearLine(state, x, y, Math.sign(px - x) || 1, 0, Math.abs(px - x))) return true;
+  }
+  return false;
 }
 
 function nearestEnemyCell(state, bot, cx, cy) {
@@ -175,15 +242,13 @@ function nearestEnemyCell(state, bot, cx, cy) {
   return best;
 }
 
-// Among reachable safe cells that touch a box, pick the one closest to the
-// enemy so the bot digs a tunnel toward the player. Falls back to the nearest.
 function pickBoxCell(state, field, cx, cy, enemy) {
   let target = null;
   let best = Infinity;
   for (const c of field.order) {
     if (c.x === cx && c.y === cy) continue;
     if (!adjacentToBox(state, c.x, c.y)) continue;
-    if (!enemy) return c; // order is nearest-first
+    if (!enemy) return c;
     const d = Math.abs(c.x - enemy.x) + Math.abs(c.y - enemy.y);
     if (d < best) { best = d; target = c; }
   }
@@ -211,23 +276,19 @@ export function computeBotInput(state, botId) {
   const cx = Math.floor(bot.x);
   const cy = Math.floor(bot.y);
   const bombCells = bombCellSet(state);
-  const danger = buildDanger(state);
-  const isSafe = (x, y) => !danger.has(key(x, y));
+  const flame = buildFlameTimes(state);
+  const danger = new Set(flame.keys());
+  const stepTime = 1 / Math.max(0.1, bot.speed);
 
-  // 1) Standing in danger -> ESCAPE. Follow the committed escape route while it
-  //    is still valid; only recompute when needed. This stops the bot from
-  //    jittering back and forth and blowing itself up.
+  // 1) In a blast lane -> ESCAPE using the time-aware planner. Commit to the
+  //    route so we don't dither and blow ourselves up.
   if (danger.has(key(cx, cy))) {
     bot.mem.path = null;
     let fp = bot.mem.fleePath;
     const valid = fp && fp.length
       && fp.every((c) => passable(state, c.x, c.y, bombCells))
-      && isSafe(fp[fp.length - 1].x, fp[fp.length - 1].y);
-    if (!valid) {
-      fp = pathToPred(bfsField(state, cx, cy, danger, bombCells), cx, cy, isSafe)
-        || pathToPred(bfsField(state, cx, cy, null, bombCells), cx, cy, isSafe);
-      bot.mem.fleePath = fp;
-    }
+      && !danger.has(key(fp[fp.length - 1].x, fp[fp.length - 1].y));
+    if (!valid) { fp = safeEscape(state, cx, cy, flame, stepTime, bombCells); bot.mem.fleePath = fp; }
     if (fp && fp.length) {
       while (fp.length) {
         const next = fp[0];
@@ -239,20 +300,21 @@ export function computeBotInput(state, botId) {
     return { dir: firstMoveDir(state, bot, danger, bombCells) || firstMoveDir(state, bot, null, bombCells), bomb: false };
   }
 
-  // Out of danger: forget the old escape route.
   bot.mem.fleePath = null;
 
-  // 2) If the current cell is a good bomb spot AND we have a guaranteed escape,
-  //    CENTRE then DROP the bomb, committing to that escape route immediately.
+  // 2) Bomb a box / enemy, but only if a proven escape to a truly safe tile
+  //    exists. Centre first, then plant and commit to the escape route.
   if (bot.activeBombs < bot.maxBombs) {
     const worth = adjacentToBox(state, cx, cy) || enemyInBlast(state, bot, cx, cy, bot.range);
     if (worth) {
-      const escape = findEscape(state, bot, cx, cy, bombCells);
-      if (escape) {
+      const flame2 = buildFlameTimes(state, { x: cx, y: cy, range: bot.range });
+      const escape = safeEscape(state, cx, cy, flame2, stepTime, bombCells);
+      const last = escape && escape.length ? escape[escape.length - 1] : null;
+      if (last && !flame2.has(key(last.x, last.y))) {
         bot.mem.path = null;
         const cd = centerDir(bot, cx, cy);
-        if (cd) return { dir: cd, bomb: false }; // align onto the cell first
-        bot.mem.fleePath = escape;               // commit escape before planting
+        if (cd) return { dir: cd, bomb: false };
+        bot.mem.fleePath = escape;
         return { dir: null, bomb: true };
       }
     }
@@ -269,7 +331,7 @@ export function computeBotInput(state, botId) {
     }
   }
 
-  // Follow a committed plan while it stays safe & valid.
+  // Follow the committed travel plan while it stays valid & safe.
   bot.mem.repath -= 1;
   if (bot.mem.path && bot.mem.path.length && bot.mem.repath > 0) {
     while (bot.mem.path.length) {
@@ -284,8 +346,8 @@ export function computeBotInput(state, botId) {
     }
   }
 
-  // 4) Replan. If the player is directly reachable, hunt them down. Otherwise
-  //    dig toward the player by bombing the box closest to them.
+  // 4) Replan: reach the player if possible, else dig toward them, else hunt,
+  //    else roam toward them.
   bot.mem.repath = 16;
   const enemy = nearestEnemyCell(state, bot, cx, cy);
 
@@ -301,11 +363,9 @@ export function computeBotInput(state, botId) {
     const boxCell = pickBoxCell(state, safe, cx, cy, enemy);
     if (boxCell) path = reconstruct(safe, cx, cy, boxCell);
   }
-
   if (!path) path = pathToPred(safe, cx, cy, (x, y) => enemyAtCell(state, bot, x, y));
 
   if (!path) {
-    // Nothing to do here: roam toward the player, or somewhere new.
     const reachable = safe.order.filter((c) => !(c.x === cx && c.y === cy));
     if (reachable.length) {
       let target;
@@ -326,6 +386,5 @@ export function computeBotInput(state, botId) {
     if (d) return { dir: d, bomb: false };
   }
 
-  // Never freeze.
   return { dir: firstMoveDir(state, bot, danger, bombCells) || firstMoveDir(state, bot, null, bombCells), bomb: false };
 }
