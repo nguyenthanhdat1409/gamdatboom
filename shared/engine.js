@@ -7,7 +7,8 @@ import {
   BOMB_TIMER, EXPLOSION_TIME, POWERUP_CHANCE,
   P_HALF, START_BOMBS, START_RANGE, START_SPEED,
   START_LIVES, HIT_INVULN,
-  MAX_RANGE, MAX_BOMBS, MAX_SPEED, POWERUPS,
+  MAX_RANGE, MAX_BOMBS, MAX_SPEED, MAX_LIVES,
+  POWERUPS, POWERUP_WEIGHTS,
 } from './constants.js';
 
 // ----- Map generation ---------------------------------------------------
@@ -207,10 +208,22 @@ function placeBomb(state, p) {
 }
 
 function maybeSpawnPowerup(state, cx, cy, rnd) {
-  if ((rnd ? rnd() : Math.random()) < POWERUP_CHANCE) {
-    const type = POWERUPS[Math.floor((rnd ? rnd() : Math.random()) * POWERUPS.length)];
+  const r = rnd || Math.random;
+  if (r() < POWERUP_CHANCE) {
+    const type = weightedPowerup(r);
     state.powerups.push({ x: cx, y: cy, type, spawnTime: state.time });
   }
+}
+
+function weightedPowerup(r) {
+  let total = 0;
+  for (const t of POWERUPS) total += POWERUP_WEIGHTS[t] || 1;
+  let roll = r() * total;
+  for (const t of POWERUPS) {
+    roll -= POWERUP_WEIGHTS[t] || 1;
+    if (roll < 0) return t;
+  }
+  return POWERUPS[0];
 }
 
 function explodeBomb(state, b) {
@@ -339,6 +352,10 @@ function applyPowerup(p, type) {
   if (type === 'bomb') p.maxBombs = Math.min(MAX_BOMBS, p.maxBombs + 1);
   else if (type === 'range') p.range = Math.min(MAX_RANGE, p.range + 1);
   else if (type === 'speed') p.speed = Math.min(MAX_SPEED, p.speed + 0.7);
+  else if (type === 'heart') {
+    p.lives = Math.min(MAX_LIVES, p.lives + 1);
+    p.maxLives = Math.max(p.maxLives, p.lives);
+  }
 }
 
 // ----- Input ------------------------------------------------------------

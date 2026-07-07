@@ -5,7 +5,7 @@ import { EMPTY, WALL, BOX, getCharacter } from '../../shared/constants.js';
 
 export const TILE = 50;
 
-const POWERUP_ICON = { bomb: '💣', range: '🔥', speed: '👟' };
+const POWERUP_ICON = { bomb: '💣', range: '🔥', speed: '👟', heart: '❤️' };
 
 export function createRenderer(canvas) {
   const ctx = canvas.getContext('2d');
@@ -128,17 +128,25 @@ function drawBox(ctx, px, py) {
   ctx.stroke();
 }
 
+const POWERUP_COLORS = {
+  bomb: ['#ff6ec7', '#7873f5'],
+  range: ['#ffb347', '#ff5e62'],
+  speed: ['#43e97b', '#38f9d7'],
+  heart: ['#ff5f6d', '#c40233'],
+};
+
 function drawPowerup(ctx, px, py, type) {
   const t = Date.now() / 500;
   const pulse = 1 + Math.sin(t) * 0.06;
+  const colors = POWERUP_COLORS[type] || POWERUP_COLORS.bomb;
   ctx.save();
   ctx.translate(px + TILE / 2, py + TILE / 2);
   ctx.scale(pulse, pulse);
   const g = ctx.createLinearGradient(-TILE / 2, -TILE / 2, TILE / 2, TILE / 2);
-  g.addColorStop(0, '#ff6ec7');
-  g.addColorStop(1, '#7873f5');
+  g.addColorStop(0, colors[0]);
+  g.addColorStop(1, colors[1]);
   ctx.fillStyle = g;
-  ctx.shadowColor = '#ff6ec7';
+  ctx.shadowColor = colors[0];
   ctx.shadowBlur = 16;
   roundRect(ctx, -TILE / 2 + 6, -TILE / 2 + 6, TILE - 12, TILE - 12, 9);
   ctx.fill();

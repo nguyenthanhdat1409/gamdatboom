@@ -18,8 +18,11 @@ export const HIT_INVULN = 1.6; // seconds of invulnerability after taking a hit
 export const MAX_RANGE = 9;
 export const MAX_BOMBS = 8;
 export const MAX_SPEED = 8.5;
+export const MAX_LIVES = 6; // cap for accumulated hearts
 
-export const POWERUPS = ['bomb', 'range', 'speed'];
+export const POWERUPS = ['bomb', 'range', 'speed', 'heart'];
+// Relative drop rates (hearts are rarer since they are the strongest reward).
+export const POWERUP_WEIGHTS = { bomb: 3, range: 3, speed: 3, heart: 1 };
 
 // Map size presets (odd numbers work best for the pillar grid).
 export const MAP_SIZES = {
