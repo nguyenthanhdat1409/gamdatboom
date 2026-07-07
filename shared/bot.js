@@ -286,13 +286,15 @@ export function computeBotInput(state, botId) {
   const danger = new Set(flame.keys());
   const stepTime = 1 / Math.max(0.1, bot.speed);
 
-  // Anti-stuck watchdog: if the bot keeps circling the same 1-3 tiles while safe,
-  // it is looping. We force a fresh random destination to break out.
+  // Anti-stuck watchdog: only fires when the bot is OSCILLATING between 2-3
+  // tiles (a real loop). Standing still on a single safe tile is allowed
+  // (that's how it hides from bombs), so we exclude the 1-unique-tile case.
   const cellKey = key(cx, cy);
   bot.mem.recent.push(cellKey);
   if (bot.mem.recent.length > 40) bot.mem.recent.shift();
+  const uniqRecent = new Set(bot.mem.recent).size;
   const bored = bot.mem.recent.length >= 40
-    && new Set(bot.mem.recent).size <= 3
+    && uniqRecent >= 2 && uniqRecent <= 3
     && !danger.has(cellKey);
 
   // 1) In a blast lane -> ESCAPE using the time-aware planner. Commit to the
@@ -395,6 +397,10 @@ export function computeBotInput(state, botId) {
   if (!path) path = pathToPred(safe, cx, cy, (x, y) => enemyAtCell(state, bot, x, y));
 
   if (!path) {
+    // Can't safely reach anything right now. If bombs are ticking on the board,
+    // just STAND STILL on our safe tile and wait them out instead of wandering
+    // into danger. Only roam when the board is calm.
+    if (flame.size > 0) { bot.mem.path = null; return { dir: null, bomb: false }; }
     const reachable = safe.order.filter((c) => !(c.x === cx && c.y === cy));
     if (reachable.length) {
       let target;
