@@ -252,6 +252,7 @@ body.is-host #wait-host { display: none; }
 }
 .hud-player.dead { opacity: 0.4; text-decoration: line-through; }
 .hud-player .hp-emoji { font-size: 16px; }
+.hud-player .hp-hearts { font-size: 11px; letter-spacing: -1px; }
 .hud-player .hp-stats { color: var(--muted); font-size: 11px; }
 .hud-right { display: flex; align-items: center; gap: 10px; }
 .hud-timer { font-family: 'Baloo 2'; font-size: 20px; font-weight: 700; color: var(--accent); }

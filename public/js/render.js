@@ -206,11 +206,16 @@ function drawPlayer(ctx, p, isLocal) {
   ctx.save();
   ctx.translate(px, py);
 
+  // Blink while invulnerable (just got hit).
+  const blinking = p.invuln > 0 && Math.floor(Date.now() / 120) % 2 === 0;
+
   // Shadow.
   ctx.fillStyle = 'rgba(0,0,0,0.3)';
   ctx.beginPath();
   ctx.ellipse(0, TILE * 0.28, TILE * 0.26, TILE * 0.1, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  if (blinking) ctx.globalAlpha = 0.35;
 
   // Colored ring.
   ctx.beginPath();
@@ -230,6 +235,23 @@ function drawPlayer(ctx, p, isLocal) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(ch.emoji, 0, 2);
+
+  ctx.globalAlpha = 1;
+
+  // Hearts above the head.
+  if (p.maxLives) {
+    const hs = 11; // heart spacing
+    const total = p.maxLives * hs;
+    ctx.font = '11px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < p.maxLives; i++) {
+      const hx = -total / 2 + hs / 2 + i * hs;
+      ctx.globalAlpha = i < p.lives ? 1 : 0.28;
+      ctx.fillText(i < p.lives ? '❤️' : '🖤', hx, -TILE * 0.92);
+    }
+    ctx.globalAlpha = 1;
+  }
 
   // Name tag.
   const name = p.name || '';

@@ -6,6 +6,7 @@ import {
   EMPTY, WALL, BOX,
   BOMB_TIMER, EXPLOSION_TIME, POWERUP_CHANCE,
   P_HALF, START_BOMBS, START_RANGE, START_SPEED,
+  START_LIVES, HIT_INVULN,
   MAX_RANGE, MAX_BOMBS, MAX_SPEED, POWERUPS,
 } from './constants.js';
 
@@ -96,6 +97,9 @@ export function createGame({ width, height, players, seed }) {
       activeBombs: 0,
       range: START_RANGE,
       speed: START_SPEED,
+      lives: START_LIVES,
+      maxLives: START_LIVES,
+      invuln: 0,
       alive: true,
       kills: 0,
       wins: 0,
@@ -246,6 +250,11 @@ export function updateGame(state, dt) {
   if (state.status !== 'playing') return;
   state.time += dt;
 
+  // Tick down invulnerability frames.
+  for (const p of Object.values(state.players)) {
+    if (p.invuln > 0) p.invuln = Math.max(0, p.invuln - dt);
+  }
+
   // Refresh bomb pass-through sets (players stop passing once they leave).
   for (const b of state.bombs) {
     for (const id of [...b.pass]) {
@@ -281,14 +290,19 @@ export function updateGame(state, dt) {
     state.powerups = state.powerups.filter((pu) => !state.explosions.some(
       (e) => e.x === pu.x && e.y === pu.y && e.startTime > pu.spawnTime
     ));
-    // Kill players standing in flames.
+    // Flames take a heart (with brief invulnerability so one blast != 3 hearts).
     for (const p of Object.values(state.players)) {
-      if (!p.alive) continue;
+      if (!p.alive || p.invuln > 0) continue;
       for (const e of state.explosions) {
         if (coversCell(p, e.x, e.y)) {
-          p.alive = false;
-          const killer = state.players[e.owner];
-          if (killer && killer.id !== p.id) killer.kills++;
+          p.lives -= 1;
+          p.invuln = HIT_INVULN;
+          if (p.lives <= 0) {
+            p.lives = 0;
+            p.alive = false;
+            const killer = state.players[e.owner];
+            if (killer && killer.id !== p.id) killer.kills++;
+          }
           break;
         }
       }
@@ -347,6 +361,7 @@ export function serializeState(state) {
       id: p.id, name: p.name, char: p.char, color: p.color, isBot: p.isBot,
       x: +p.x.toFixed(3), y: +p.y.toFixed(3), dir: p.dir,
       maxBombs: p.maxBombs, range: p.range, speed: +p.speed.toFixed(2),
+      lives: p.lives, maxLives: p.maxLives, invuln: +p.invuln.toFixed(2),
       alive: p.alive, kills: p.kills, wins: p.wins,
     })),
     bombs: state.bombs.map((b) => ({

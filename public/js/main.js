@@ -204,8 +204,12 @@ function updateHud(state) {
     const ch = getCharacter(p.char);
     const el = document.createElement('div');
     el.className = 'hud-player' + (p.alive ? '' : ' dead');
+    const lives = p.maxLives || 0;
+    let hearts = '';
+    for (let i = 0; i < lives; i++) hearts += i < p.lives ? '❤️' : '🖤';
     el.innerHTML = `<span class="hp-emoji">${ch.emoji}</span>
       <span>${p.name}</span>
+      <span class="hp-hearts">${hearts}</span>
       <span class="hp-stats">💣${p.maxBombs} 🔥${p.range}</span>`;
     wrap.appendChild(el);
   }

@@ -140,12 +140,15 @@ function clearLine(state, x, y, dx, dy, n) {
   return true;
 }
 
-// Would a bomb at (x,y) still leave the bot a way out?
-function hasEscape(state, bot, x, y, bombCells) {
+// If a bomb were dropped at (x,y), return a concrete escape path to a safe
+// tile (or null if there is none). The bot commits to this path so it never
+// dithers left/right/up/down and blows itself up.
+function findEscape(state, bot, x, y, bombCells) {
   const danger2 = buildDanger(state, { x, y, range: bot.range });
   const field = bfsField(state, x, y, null, bombCells);
   const path = pathToPred(field, x, y, (cx, cy) => !danger2.has(key(cx, cy)));
-  return !!(path && path.length <= bot.range + 4);
+  if (path && path.length <= bot.range + 4) return path;
+  return null;
 }
 
 // Direction to move toward the centre of the bot's own (empty) cell.
@@ -203,7 +206,7 @@ function firstMoveDir(state, bot, avoid, bombCells) {
 export function computeBotInput(state, botId) {
   const bot = state.players[botId];
   if (!bot || !bot.alive) return { dir: null, bomb: false };
-  if (!bot.mem) bot.mem = { path: null, repath: 0 };
+  if (!bot.mem) bot.mem = { path: null, repath: 0, fleePath: null };
 
   const cx = Math.floor(bot.x);
   const cy = Math.floor(bot.y);
@@ -211,28 +214,47 @@ export function computeBotInput(state, botId) {
   const danger = buildDanger(state);
   const isSafe = (x, y) => !danger.has(key(x, y));
 
-  // 1) Standing in danger -> escape RIGHT NOW. Prefer a route that avoids other
-  //    blasts, fall back to cutting straight through if that's the only way out.
+  // 1) Standing in danger -> ESCAPE. Follow the committed escape route while it
+  //    is still valid; only recompute when needed. This stops the bot from
+  //    jittering back and forth and blowing itself up.
   if (danger.has(key(cx, cy))) {
     bot.mem.path = null;
-    let path = pathToPred(bfsField(state, cx, cy, danger, bombCells), cx, cy, isSafe);
-    if (!path) path = pathToPred(bfsField(state, cx, cy, null, bombCells), cx, cy, isSafe);
-    if (path && path.length) {
-      const d = stepDir(bot, path[0]);
-      if (d) return { dir: d, bomb: false };
+    let fp = bot.mem.fleePath;
+    const valid = fp && fp.length
+      && fp.every((c) => passable(state, c.x, c.y, bombCells))
+      && isSafe(fp[fp.length - 1].x, fp[fp.length - 1].y);
+    if (!valid) {
+      fp = pathToPred(bfsField(state, cx, cy, danger, bombCells), cx, cy, isSafe)
+        || pathToPred(bfsField(state, cx, cy, null, bombCells), cx, cy, isSafe);
+      bot.mem.fleePath = fp;
+    }
+    if (fp && fp.length) {
+      while (fp.length) {
+        const next = fp[0];
+        const d = stepDir(bot, next);
+        if (d === null) { fp.shift(); continue; }
+        return { dir: d, bomb: false };
+      }
     }
     return { dir: firstMoveDir(state, bot, danger, bombCells) || firstMoveDir(state, bot, null, bombCells), bomb: false };
   }
 
-  // 2) If the current cell is a good bomb spot, CENTRE then DROP the bomb.
-  //    (This is the key fix: never walk away from a box that is right next to us.)
+  // Out of danger: forget the old escape route.
+  bot.mem.fleePath = null;
+
+  // 2) If the current cell is a good bomb spot AND we have a guaranteed escape,
+  //    CENTRE then DROP the bomb, committing to that escape route immediately.
   if (bot.activeBombs < bot.maxBombs) {
     const worth = adjacentToBox(state, cx, cy) || enemyInBlast(state, bot, cx, cy, bot.range);
-    if (worth && hasEscape(state, bot, cx, cy, bombCells)) {
-      bot.mem.path = null;
-      const cd = centerDir(bot, cx, cy);
-      if (cd) return { dir: cd, bomb: false }; // align onto the cell first
-      return { dir: null, bomb: true };         // centred -> plant it
+    if (worth) {
+      const escape = findEscape(state, bot, cx, cy, bombCells);
+      if (escape) {
+        bot.mem.path = null;
+        const cd = centerDir(bot, cx, cy);
+        if (cd) return { dir: cd, bomb: false }; // align onto the cell first
+        bot.mem.fleePath = escape;               // commit escape before planting
+        return { dir: null, bomb: true };
+      }
     }
   }
 
