@@ -271,7 +271,7 @@ function firstMoveDir(state, bot, avoid, bombCells) {
 export function computeBotInput(state, botId) {
   const bot = state.players[botId];
   if (!bot || !bot.alive) return { dir: null, bomb: false };
-  if (!bot.mem) bot.mem = { path: null, repath: 0, fleePath: null };
+  if (!bot.mem) bot.mem = { path: null, repath: 0, fleePath: null, recent: [] };
 
   const cx = Math.floor(bot.x);
   const cy = Math.floor(bot.y);
@@ -279,6 +279,15 @@ export function computeBotInput(state, botId) {
   const flame = buildFlameTimes(state);
   const danger = new Set(flame.keys());
   const stepTime = 1 / Math.max(0.1, bot.speed);
+
+  // Anti-stuck watchdog: if the bot keeps circling the same 1-3 tiles while safe,
+  // it is looping. We force a fresh random destination to break out.
+  const cellKey = key(cx, cy);
+  bot.mem.recent.push(cellKey);
+  if (bot.mem.recent.length > 40) bot.mem.recent.shift();
+  const bored = bot.mem.recent.length >= 40
+    && new Set(bot.mem.recent).size <= 3
+    && !danger.has(cellKey);
 
   // 1) In a blast lane -> ESCAPE using the time-aware planner. Commit to the
   //    route so we don't dither and blow ourselves up.
@@ -343,6 +352,20 @@ export function computeBotInput(state, botId) {
       const d = stepDir(bot, next);
       if (d === null) { bot.mem.path.shift(); continue; }
       return { dir: d, bomb: false };
+    }
+  }
+
+  // Watchdog kicked in: jump to a fresh random tile to break the loop.
+  if (bored) {
+    bot.mem.recent.length = 0;
+    bot.mem.path = null;
+    const reachable = safe.order.filter((c) => !(c.x === cx && c.y === cy));
+    if (reachable.length) {
+      const t = reachable[Math.floor(Math.random() * reachable.length)];
+      const p = reconstruct(safe, cx, cy, t);
+      bot.mem.path = p;
+      bot.mem.repath = 24;
+      if (p && p.length) { const d = stepDir(bot, p[0]); if (d) return { dir: d, bomb: false }; }
     }
   }
 
