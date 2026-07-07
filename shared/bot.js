@@ -148,6 +148,45 @@ function hasEscape(state, bot, x, y, bombCells) {
   return !!(path && path.length <= bot.range + 4);
 }
 
+// Direction to move toward the centre of the bot's own (empty) cell.
+function centerDir(bot, cx, cy) {
+  const tx = cx + 0.5;
+  const ty = cy + 0.5;
+  // 0.2 keeps the bomb in this cell while being loose enough to avoid jitter
+  // at high speeds.
+  if (Math.abs(tx - bot.x) > 0.2) return tx < bot.x ? 'left' : 'right';
+  if (Math.abs(ty - bot.y) > 0.2) return ty < bot.y ? 'up' : 'down';
+  return null;
+}
+
+function nearestEnemyCell(state, bot, cx, cy) {
+  let best = null;
+  let bd = Infinity;
+  for (const p of Object.values(state.players)) {
+    if (!p.alive || p.id === bot.id) continue;
+    const ex = Math.floor(p.x);
+    const ey = Math.floor(p.y);
+    const d = Math.abs(ex - cx) + Math.abs(ey - cy);
+    if (d < bd) { bd = d; best = { x: ex, y: ey }; }
+  }
+  return best;
+}
+
+// Among reachable safe cells that touch a box, pick the one closest to the
+// enemy so the bot digs a tunnel toward the player. Falls back to the nearest.
+function pickBoxCell(state, field, cx, cy, enemy) {
+  let target = null;
+  let best = Infinity;
+  for (const c of field.order) {
+    if (c.x === cx && c.y === cy) continue;
+    if (!adjacentToBox(state, c.x, c.y)) continue;
+    if (!enemy) return c; // order is nearest-first
+    const d = Math.abs(c.x - enemy.x) + Math.abs(c.y - enemy.y);
+    if (d < best) { best = d; target = c; }
+  }
+  return target;
+}
+
 function firstMoveDir(state, bot, avoid, bombCells) {
   const cx = Math.floor(bot.x);
   const cy = Math.floor(bot.y);
@@ -172,8 +211,8 @@ export function computeBotInput(state, botId) {
   const danger = buildDanger(state);
   const isSafe = (x, y) => !danger.has(key(x, y));
 
-  // 1) Standing in danger -> escape. Prefer a route that avoids other blasts,
-  //    fall back to cutting straight through if that's the only way out.
+  // 1) Standing in danger -> escape RIGHT NOW. Prefer a route that avoids other
+  //    blasts, fall back to cutting straight through if that's the only way out.
   if (danger.has(key(cx, cy))) {
     bot.mem.path = null;
     let path = pathToPred(bfsField(state, cx, cy, danger, bombCells), cx, cy, isSafe);
@@ -185,24 +224,26 @@ export function computeBotInput(state, botId) {
     return { dir: firstMoveDir(state, bot, danger, bombCells) || firstMoveDir(state, bot, null, bombCells), bomb: false };
   }
 
-  const centered = Math.abs(bot.x - (cx + 0.5)) < 0.26 && Math.abs(bot.y - (cy + 0.5)) < 0.26;
+  // 2) If the current cell is a good bomb spot, CENTRE then DROP the bomb.
+  //    (This is the key fix: never walk away from a box that is right next to us.)
+  if (bot.activeBombs < bot.maxBombs) {
+    const worth = adjacentToBox(state, cx, cy) || enemyInBlast(state, bot, cx, cy, bot.range);
+    if (worth && hasEscape(state, bot, cx, cy, bombCells)) {
+      bot.mem.path = null;
+      const cd = centerDir(bot, cx, cy);
+      if (cd) return { dir: cd, bomb: false }; // align onto the cell first
+      return { dir: null, bomb: true };         // centred -> plant it
+    }
+  }
+
   const safe = bfsField(state, cx, cy, danger, bombCells);
 
-  // 2) Grab a reachable power-up.
+  // 3) Grab a reachable power-up.
   if (state.powerups.length) {
     const path = pathToPred(safe, cx, cy, (x, y) => state.powerups.some((pu) => pu.x === x && pu.y === y));
     if (path && path.length) {
       const d = stepDir(bot, path[0]);
       if (d) { bot.mem.path = null; return { dir: d, bomb: false }; }
-    }
-  }
-
-  // 3) Drop a bomb if it hits something and we can survive it.
-  if (centered && bot.activeBombs < bot.maxBombs) {
-    const worth = adjacentToBox(state, cx, cy) || enemyInBlast(state, bot, cx, cy, bot.range);
-    if (worth && hasEscape(state, bot, cx, cy, bombCells)) {
-      bot.mem.path = null;
-      return { dir: null, bomb: true };
     }
   }
 
@@ -221,24 +262,38 @@ export function computeBotInput(state, botId) {
     }
   }
 
-  // Replan: nearest box, then nearest enemy, then wander.
+  // 4) Replan. If the player is directly reachable, hunt them down. Otherwise
+  //    dig toward the player by bombing the box closest to them.
   bot.mem.repath = 16;
-  let path = pathToPred(safe, cx, cy, (x, y) => adjacentToBox(state, x, y));
+  const enemy = nearestEnemyCell(state, bot, cx, cy);
+
+  let path = pathToPred(safe, cx, cy, (x, y) => {
+    for (const p of Object.values(state.players)) {
+      if (!p.alive || p.id === bot.id) continue;
+      if (Math.abs(Math.floor(p.x) - x) + Math.abs(Math.floor(p.y) - y) <= 1) return true;
+    }
+    return false;
+  });
+
   if (!path) {
-    path = pathToPred(safe, cx, cy, (x, y) => {
-      for (const p of Object.values(state.players)) {
-        if (!p.alive || p.id === bot.id) continue;
-        if (Math.abs(Math.floor(p.x) - x) + Math.abs(Math.floor(p.y) - y) <= 1) return true;
-      }
-      return false;
-    });
+    const boxCell = pickBoxCell(state, safe, cx, cy, enemy);
+    if (boxCell) path = reconstruct(safe, cx, cy, boxCell);
   }
+
   if (!path) path = pathToPred(safe, cx, cy, (x, y) => enemyAtCell(state, bot, x, y));
+
   if (!path) {
+    // Nothing to do here: roam toward the player, or somewhere new.
     const reachable = safe.order.filter((c) => !(c.x === cx && c.y === cy));
     if (reachable.length) {
-      const far = reachable.slice(Math.floor(reachable.length / 2));
-      const target = far[Math.floor(Math.random() * far.length)] || reachable[reachable.length - 1];
+      let target;
+      if (enemy) {
+        target = reachable.reduce((a, b) =>
+          (Math.abs(b.x - enemy.x) + Math.abs(b.y - enemy.y) < Math.abs(a.x - enemy.x) + Math.abs(a.y - enemy.y)) ? b : a);
+      } else {
+        const far = reachable.slice(Math.floor(reachable.length / 2));
+        target = far[Math.floor(Math.random() * far.length)] || reachable[reachable.length - 1];
+      }
       path = reconstruct(safe, cx, cy, target);
     }
   }
