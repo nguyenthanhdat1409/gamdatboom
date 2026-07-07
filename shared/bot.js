@@ -174,12 +174,18 @@ function safeEscape(state, sx, sy, flame, stepTime, bombCells) {
   return path.length ? path : null;
 }
 
+// Direction from the bot's CURRENT cell toward `cell`. We move along the axis
+// with the larger cell-distance and let the engine auto-snap the perpendicular
+// axis. Crucially we never try to "fix" a small sub-tile offset by stepping
+// sideways (that used to jam the bot against a wall when it needed to go up/down).
 function stepDir(bot, cell) {
-  const tx = cell.x + 0.5;
-  const ty = cell.y + 0.5;
-  if (Math.abs(tx - bot.x) > 0.06) return tx < bot.x ? 'left' : 'right';
-  if (Math.abs(ty - bot.y) > 0.06) return ty < bot.y ? 'up' : 'down';
-  return null;
+  const cx = Math.floor(bot.x);
+  const cy = Math.floor(bot.y);
+  const dx = cell.x - cx;
+  const dy = cell.y - cy;
+  if (dx === 0 && dy === 0) return null; // already on this cell
+  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? 'left' : 'right';
+  return dy < 0 ? 'up' : 'down';
 }
 
 function centerDir(bot, cx, cy) {
